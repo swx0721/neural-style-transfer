@@ -1,0 +1,2 @@
+需要手动下载  vgg19权重文件+face数据集
+vgg19-5104d1ea-910v2.ckpt：https://download.mindspore.cn/toolkits/mindcv/vgg/

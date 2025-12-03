@@ -1,143 +1,138 @@
-import argparse
-import os
-import sys
-import PIL
-import yaml
-import torch
-import torch.nn as nn
-from torchvision.utils import save_image
-from PIL import Image
+# image_style_transfer.py (MindSpore CPU Version - FINAL - 快速推理版)
 
-from src.process_image import load_image, get_image_name_ext
-from src.train_model import train_image
+import mindspore as ms
+from mindspore import nn, ops, context, Tensor
+from mindspore.nn import Adam
+from mindspore import dtype as mstype
+import numpy as np
+import time
+import yaml
+import argparse
+import sys
+import os
+import cv2 
+from mindspore import load_checkpoint, load_param_into_net
+
+# 假设 src/ 在路径中
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
+
+# 导入所有必要的 MindSpore 兼容函数
+# 注意：我们现在需要导入 StyleGenerator
+from src.train_model import StyleGenerator 
+from src.process_image import load_image, tensor_convert, image_convert, get_image_name_ext
+
+
+# --- Global MindSpore Context Setup ---
+# 推理时使用 GRAPH_MODE 也可以，但 PYNATIVE_MODE 更灵活
+context.set_context(mode=context.PYNATIVE_MODE, device_target="CPU")
+
+
+def infer_image(content_tensor, checkpoint_path):
+    """
+    Performs fast style transfer inference using a pre-trained StyleGenerator model.
+    """
+    
+    # 1. 实例化 StyleGenerator 模型
+    generator = StyleGenerator()
+    
+    # 2. 加载预训练的权重文件
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Error: Model checkpoint file not found at {checkpoint_path}")
+        
+    print(f"Loading pre-trained model from {checkpoint_path}...")
+    
+    # 使用 MindSpore 的 API 加载参数
+    param_dict = load_checkpoint(checkpoint_path)
+    load_param_into_net(generator, param_dict)
+    
+    # 3. 设置为推理模式 (关闭 Dropout/BatchNorm 的训练行为)
+    generator.set_train(False)
+
+    # 4. 执行单次前向传播 (即风格迁移)
+    print("Performing fast style transfer inference...")
+    
+    # 确保输入在 CPU 上
+    if content_tensor.context.device_target != 'CPU':
+        content_tensor = ops.Cast()(content_tensor, mstype.float32)
+
+    styled_tensor = generator(content_tensor)
+    
+    # StyleGenerator 的输出是 tanh 激活后的，需要 MindSpore 内部处理，
+    # 这里的 styled_tensor 已经包含了风格信息。
+    return styled_tensor
 
 
 def image_style_transfer(config):
     """Implements neural style transfer on a content image using a style image, applying provided configuration."""
-    if config.get('image_dir') is not None:
-        image_dir = config.get('image_dir')
-        content_path = os.path.join(image_dir, config.get('content_filename'))
-        style_path = os.path.join(image_dir, config.get('style_filename'))
-        output_dir = config.get('output_dir') if config.get('output_dir') is not None else image_dir
-    else:
-        output_dir = config.get('output_dir')
-        content_path = config.get('content_filepath')
-        style_path = config.get('style_path')
+    
+    # --- 路径处理逻辑 ---
+    output_dir = config.get('output_dir')
+    content_path = config.get('content_filepath')
+    checkpoint_path = config.get('checkpoint_path')
+    
+    # 检查是否提供了预训练模型路径
+    if not checkpoint_path:
+        print("Error: Running in Fast Mode requires --checkpoint_path to a pre-trained StyleGenerator model.")
+        print("Please train the StyleGenerator first, or provide a path to a ready-made model.")
+        return
 
     verbose = not config.get('quiet')
-
-    if verbose:
-        print("Loading content and style images...")
-    
-    try:
-        content_img = Image.open(content_path)
-    except FileNotFoundError:
-        print(f"ERROR: could not find such file: '{content_path}'.")
-        return
-    except PIL.UnidentifiedImageError:
-        print(f"ERROR: could not identify image file: '{content_path}'.")
-        return
-
-    try:
-        style_img = Image.open(style_path)
-    except FileNotFoundError:
-        print(f"ERROR: could not find such file: '{style_path}'.")
-        return
-    except PIL.UnidentifiedImageError:
-        print(f"ERROR: could not identify image file: '{style_path}'.")
-        return
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
-    # load content and style images
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    output_size = config.get('output_image_size')
-    if output_size is not None:
-        if len(output_size) > 1: 
-            output_size = tuple(output_size)
-        else:
-            output_size = output_size[0]
-
-    content_tensor = load_image(content_path, device, output_size=output_size)
-    output_size = (content_tensor.shape[2], content_tensor.shape[3])
-    style_tensor = load_image(style_path, device, output_size=output_size)
-
-    if verbose:
-        print("Content and style images successfully loaded.")
-        print()
-        print("Initializing output image...")
-
-    # initialize output image
-    generated_tensor = content_tensor.clone().requires_grad_(True)
-
-    if verbose:
-        print("Output image successfully initialized.")
-        print()
-
-    # load training configuration if provided
-    train_config = dict()
-    if (train_config_path := config.get('train_config_path')) is not None:
         if verbose:
-            print("Loading training configuration file...")
+            print(f"Created output directory: {output_dir}")
 
-        try:
-            with open(train_config_path, 'r') as f:
-                train_config = yaml.safe_load(f)
-        except FileNotFoundError:
-            print(f"ERROR: could not find such file: '{train_config_path}'.")
-            return
-        except yaml.YAMLError:
-            print(f"ERROR: fail to load yaml file: '{train_config_path}'.")
-            return
+    # Load content image
+    # Note: style_filepath is no longer needed for inference, but load_image needs target_size
+    content_np = load_image(content_path) 
 
-        if verbose:
-            print("Training configuration file successfully loaded.")
-            print()
-        
-    if verbose:
-        print("Training...")
+    # Convert to MindSpore Tensor
+    content_tensor = tensor_convert(content_np)
+
+    # Run the MindSpore inference
+    start_time = time.time()
+    result_tensor = infer_image(content_tensor, checkpoint_path)
+    end_time = time.time()
     
-    content_img_name, content_img_fmt = get_image_name_ext(content_path)
-    style_img_name, _ = get_image_name_ext(style_path)
+    print(f"\nStyle Transfer completed in {end_time - start_time:.4f} seconds.")
 
-    output_img_fmt = config.get('output_image_format')
-    if output_img_fmt == 'same':
-        output_img_fmt = content_img_fmt
-
-    # train model
-    success = train_image(content_tensor, style_tensor, generated_tensor, device, train_config, output_dir, output_img_fmt, content_img_name, style_img_name, verbose=verbose)
-
-    # save output image to specified directory
-    if success:
-        save_image(generated_tensor, os.path.join(output_dir, f'nst-{content_img_name}-{style_img_name}-final.{output_img_fmt}'))
-
-    if verbose:
-        print(f"Output image successfully generated as {os.path.join(output_dir, f'nst-{content_img_name}-{style_img_name}-final.{output_img_fmt}')}.")
+    # Convert result tensor back to image and save
+    result_image = image_convert(result_tensor)
+    
+    # 确定输出文件名
+    name, ext = get_image_name_ext(content_path) 
+    # 推荐输出 jpg
+    output_filename = f"{name}_styled_fast.jpg" 
+    output_path = os.path.join(output_dir, output_filename)
+    
+    cv2.imwrite(output_path, result_image)
+    print(f"Output saved to {output_path}")
 
 
-def main():
-    """Entry point of the program."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image_dir", type=str, help="Path to the directory where content image and style image are stored.")
-    parser.add_argument("--content_filename", type=str, default="content.jpg", help="File name of the content image in image_dir. Will use \"content.jpg\" if not provided.")
-    parser.add_argument("--style_filename", type=str, default="style.jpg", help="File name of the style image in image_dir. Will use \"style.jpg\" if not provided.")
-    parser.add_argument("--content_filepath", required="--image_dir" not in sys.argv, type=str, help="Path to the content image if image_dir not provided.")
-    parser.add_argument("--style_filepath", required="--image_dir" not in sys.argv, type=str, help="Path to the style image if image_dir not provided.")
-    parser.add_argument("--output_dir", required="--image_dir" not in sys.argv, type=str, help="Directory that stores the output image. Will be the same as image_dir if not provided while image_dir provided.")
-    parser.add_argument("--output_image_size", nargs="+", type=int, help="Size of the output image. Either one integer or two integers separated by space is accepted. Will use the dimensions of content image if not provided.")
-    parser.add_argument("--output_image_format", choices=["jpg", "png", "jpeg", "same"], default="jpg", help="Format of the output image. Can be either \"jpg\", \"png\", \"jpeg\", or \"same\". If \"same\", output image will have the same format as the content image. \"jpg\" will be the default format.")
-    parser.add_argument("--train_config_path", type=str, help="Path to training configuration file in .yaml format. May include: num_epochs, learning_rate, alpha, beta, capture_content_features_from, capture_style_features_from.")
-    parser.add_argument("--quiet", type=bool, default=False, help="True stops showing debugging messages, loss function values during training process, and stops generating intermediate images.")
-
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Neural Style Transfer (MindSpore Fast Inference)", formatter_class=argparse.RawTextHelpFormatter)
+    
+    # 关键参数：预训练模型路径
+    parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to the pre-trained StyleGenerator model checkpoint (.ckpt).")
+    
+    # 图像路径参数
+    parser.add_argument("--content_filepath", type=str, required=True, help="Path to the content image.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory that stores the output image.")
+    
+    # 可选参数
+    parser.add_argument("--output_image_size", nargs="+", type=int, help="Size of the output image. Will use the dimensions of content image if not provided.")
+    # 训练配置路径和 style_filepath 不再需要，但如果原始脚本有，可以保留
+    parser.add_argument("--style_filepath", type=str, help=argparse.SUPPRESS) # 隐藏 style 路径，因为推理不再需要
+    parser.add_argument("--train_config_path", type=str, help=argparse.SUPPRESS) 
+    parser.add_argument("--quiet", type=bool, default=False, help="True stops showing debugging messages.")
+    
+    # 其它兼容性参数...
+    
     args = parser.parse_args()
+    
     config = dict()
     for arg in vars(args):
         config[arg] = getattr(args, arg)
     
     image_style_transfer(config)
-
-
-if __name__ == '__main__':
-    main()
-    

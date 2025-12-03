@@ -1,6 +1,24 @@
-num_epochs: 6000
-learning_rate: 0.001
-alpha: 1
-beta: 0.01
-capture_content_features_from: {'conv11', 'conv21', 'conv31', 'conv41', 'conv51'}
-capture_style_features_from: {'conv11', 'conv21', 'conv31', 'conv41', 'conv51'}
+# num_epochs: 6000
+# learning_rate: 0.001
+# alpha: 1
+# beta: 0.01
+# capture_content_features_from: {'conv11', 'conv21', 'conv31', 'conv41', 'conv51'}
+# capture_style_features_from: {'conv11', 'conv21', 'conv31', 'conv41', 'conv51'}
+
+# 训练参数
+num_epochs: 1000  # 建议初始值
+learning_rate: 0.0001
+batch_size: 4     # 根据 GPU 显存调整
+image_size: [256, 256] # 统一输入尺寸 (H, W)
+
+# 损失权重 (请仔细调整 alpha/beta)
+alpha: 1.0  # Content Loss 权重 (相对保守地保留内容结构)
+beta: 50000.0 # Style Loss 权重 (确保风格彻底转换)
+
+# VGG19 风格层权重 (保持不变，所有层均衡学习风格)
+style_weights:
+    relu1_1: 1.0
+    relu2_1: 1.0
+    relu3_1: 1.0
+    relu4_1: 1.0
+    relu5_1: 1.0
