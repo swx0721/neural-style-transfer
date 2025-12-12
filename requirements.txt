@@ -1,0 +1,5 @@
+mindspore
+numpy
+opencv-python
+optuna
+mindcv

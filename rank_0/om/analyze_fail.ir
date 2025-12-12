@@ -1,0 +1,63 @@
+# ===============================================================================================
+# The following shows the last analyze fail log message.
+# ===============================================================================================
+
+----------------------------------------------------
+- Caught exception:
+----------------------------------------------------
+The name 'net' is not defined, or not supported in graph mode.
+
+----------------------------------------------------
+- C++ Call Stack: (For framework developers)
+----------------------------------------------------
+mindspore\ccsrc\pipeline\jit\ps\parse\function_block.cc:315 mindspore::parse::FunctionBlock::CheckUndefinedSymbol
+
+----------------------------------------------------
+- The Traceback of Net Construct Code:
+----------------------------------------------------
+
+# ===============================================================================================
+# The following shows the IR when the function graphs evaluation fails to help locate the problem.
+# You can search the last ------------------------> to the node which is evaluated failure.
+# Refer to https://www.mindspore.cn/search?inputValue=analyze_fail.ir to get more instructions.
+# ===============================================================================================
+
+# IR entry: @infer_1
+# Total subgraphs: 0
+
+# Total params: 1
+# Params:
+%para1_x: <null>
+
+subgraph attr:
+subgraph instance: infer_1 : 0000011F1B109AE0
+
+subgraph @infer_1() {
+
+#------------------------> 0
+  %0(CNode_3) = resolve(NameSpace[Entry: 'infer'], infer)
+      : (<External, NoShape>, <External, NoShape>) -> (<null>)
+      #scope: (Default)
+  %1(CNode_4) = %0(%para1_Parameter_2)
+      : (<Tensor[Float32], (1, 3, 152, 212)>) -> (<null>)
+      #scope: (Default)
+  Return(%1)
+      : (<null>)
+      #scope: (Default)
+}
+# Order:
+#   1: @infer_1:CNode_3{[0]: ValueNode<Primitive> resolve, [1]: ValueNode<NameSpace> Entry: 'infer', [2]: ValueNode<Symbol> infer}
+#   2: @infer_1:CNode_4{[0]: CNode_3, [1]: param_Parameter_2}
+#   3: @infer_1:CNode_5{[0]: ValueNode<Primitive> Return, [1]: CNode_4}
+
+
+# ===============================================================================================
+# The total of function graphs in evaluation stack: 1
+# ===============================================================================================
+
+
+# ===============================================================================================
+# The rest function graphs are the following:
+# ===============================================================================================
+No more function graphs.
+
